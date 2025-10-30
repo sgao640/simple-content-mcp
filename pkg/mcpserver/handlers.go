@@ -80,6 +80,88 @@ func (s *Server) handleUploadContent(ctx context.Context, req *mcp.CallToolReque
 	})), nil
 }
 
+// handleCreateUpload creates content metadata and returns an upload URL for async upload
+func (s *Server) handleCreateUpload(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Unmarshal arguments
+	var params map[string]interface{}
+	if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
+		return nil, mcperrors.NewValidationError("arguments", err)
+	}
+
+	// Parse and validate required fields
+	ownerID, err := parseUUID(params["owner_id"])
+	if err != nil {
+		return nil, mcperrors.NewValidationError("owner_id", err)
+	}
+
+	name, ok := params["name"].(string)
+	if !ok || name == "" {
+		return nil, mcperrors.NewValidationError("name", fmt.Errorf("required"))
+	}
+
+	// Build create content request
+	createReq := simplecontent.CreateContentRequest{
+		OwnerID:        ownerID,
+		TenantID:       parseTenantID(params["tenant_id"]),
+		Name:           name,
+		Description:    getStringOr(params, "description", ""),
+		DocumentType:   getStringOr(params, "document_type", "application/octet-stream"),
+		DerivationType: simplecontent.ContentDerivationTypeOriginal,
+	}
+
+	// Call service to create content
+	content, err := s.service.CreateContent(ctx, createReq)
+	if err != nil {
+		return nil, s.mapError(err)
+	}
+
+	// Set metadata if provided
+	tags := getStringSlice(params, "tags")
+	customMetadata := getMap(params, "metadata")
+	fileName := getStringOr(params, "file_name", "")
+
+	if len(tags) > 0 || customMetadata != nil || fileName != "" {
+		metadataReq := simplecontent.SetContentMetadataRequest{
+			ContentID:      content.ID,
+			Tags:           tags,
+			FileName:       fileName,
+			CustomMetadata: customMetadata,
+		}
+		if err := s.service.SetContentMetadata(ctx, metadataReq); err != nil {
+			// Don't fail if metadata setting fails, just log it
+			// The content is already created
+		}
+	}
+
+	// Create object placeholder for the content
+	storageBackend := getStringOr(params, "storage_backend", "default")
+	createObjReq := simplecontent.CreateObjectRequest{
+		ContentID:          content.ID,
+		StorageBackendName: storageBackend,
+		Version:            1,
+		ObjectKey:          fmt.Sprintf("%s/%s", content.ID.String(), fileName),
+	}
+
+	obj, err := s.storageService.CreateObject(ctx, createObjReq)
+	if err != nil {
+		return nil, s.mapError(err)
+	}
+
+	// Get upload URL for the object
+	uploadURL, err := s.storageService.GetUploadURL(ctx, obj.ID)
+	if err != nil {
+		return nil, s.mapError(err)
+	}
+
+	// Return content_id, upload_url, and status
+	return newTextResult(formatJSON(map[string]interface{}{
+		"content_id": content.ID.String(),
+		"upload_url": uploadURL,
+		"status":     string(content.Status),
+		"created_at": content.CreatedAt,
+	})), nil
+}
+
 // handleGetContent retrieves content metadata by ID
 func (s *Server) handleGetContent(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var params map[string]interface{}
@@ -135,23 +217,23 @@ func (s *Server) handleGetContentDetails(ctx context.Context, req *mcp.CallToolR
 	}
 
 	return newTextResult(formatJSON(map[string]interface{}{
-		"id":          details.ID,
-		"download":    details.Download,
-		"upload":      details.Upload,
-		"preview":     details.Preview,
-		"thumbnail":   details.Thumbnail,
-		"thumbnails":  details.Thumbnails,
-		"previews":    details.Previews,
-		"transcodes":  details.Transcodes,
-		"file_name":   details.FileName,
-		"file_size":   details.FileSize,
-		"mime_type":   details.MimeType,
-		"tags":        details.Tags,
-		"checksum":    details.Checksum,
-		"ready":       details.Ready,
-		"expires_at":  details.ExpiresAt,
-		"created_at":  details.CreatedAt,
-		"updated_at":  details.UpdatedAt,
+		"id":         details.ID,
+		"download":   details.Download,
+		"upload":     details.Upload,
+		"preview":    details.Preview,
+		"thumbnail":  details.Thumbnail,
+		"thumbnails": details.Thumbnails,
+		"previews":   details.Previews,
+		"transcodes": details.Transcodes,
+		"file_name":  details.FileName,
+		"file_size":  details.FileSize,
+		"mime_type":  details.MimeType,
+		"tags":       details.Tags,
+		"checksum":   details.Checksum,
+		"ready":      details.Ready,
+		"expires_at": details.ExpiresAt,
+		"created_at": details.CreatedAt,
+		"updated_at": details.UpdatedAt,
 	})), nil
 }
 

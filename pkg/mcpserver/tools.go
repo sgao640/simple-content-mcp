@@ -76,6 +76,58 @@ func (s *Server) registerTools() error {
 			},
 		},
 		{
+			Name:        "create_upload",
+			Description: "Create content metadata and return upload URL for async upload",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"owner_id": map[string]interface{}{
+						"type":        "string",
+						"format":      "uuid",
+						"description": "Owner UUID",
+					},
+					"tenant_id": map[string]interface{}{
+						"type":        "string",
+						"format":      "uuid",
+						"description": "Tenant UUID (optional)",
+					},
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Content name",
+					},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "Content description",
+					},
+					"document_type": map[string]interface{}{
+						"type":        "string",
+						"description": "MIME type of the content",
+					},
+					"storage_backend": map[string]interface{}{
+						"type":        "string",
+						"description": "Storage backend name (default if empty)",
+						"default":     "default",
+					},
+					"file_name": map[string]interface{}{
+						"type":        "string",
+						"description": "Original file name",
+					},
+					"tags": map[string]interface{}{
+						"type": "array",
+						"items": map[string]interface{}{
+							"type": "string",
+						},
+						"description": "Tags for categorization",
+					},
+					"metadata": map[string]interface{}{
+						"type":        "object",
+						"description": "Custom metadata",
+					},
+				},
+				"required": []string{"owner_id", "name"},
+			},
+		},
+		{
 			Name:        "get_content",
 			Description: "Retrieve content metadata by ID",
 			InputSchema: map[string]interface{}{
@@ -487,6 +539,8 @@ func (s *Server) getToolHandler(name string) mcp.ToolHandler {
 	switch name {
 	case "upload_content":
 		return s.handleUploadContent
+	case "create_upload":
+		return s.handleCreateUpload
 	case "get_content":
 		return s.handleGetContent
 	case "get_content_details":
