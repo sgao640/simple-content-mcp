@@ -5,14 +5,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/tendant/simple-content/pkg/simplecontent"
 	memoryrepo "github.com/tendant/simple-content/pkg/simplecontent/repo/memory"
 	memorystorage "github.com/tendant/simple-content/pkg/simplecontent/storage/memory"
+	s3storage "github.com/tendant/simple-content/pkg/simplecontent/storage/s3"
 )
 
 // createTestService creates a service with in-memory backends for testing
@@ -35,6 +38,68 @@ func createTestService(t *testing.T) simplecontent.Service {
 func createTestServer(t *testing.T) *Server {
 	service := createTestService(t)
 	config := DefaultConfig(service)
+	config.StorageService = service.(simplecontent.StorageService) // Service implements StorageService
+
+	server, err := New(config)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	return server
+}
+
+// createS3TestService creates a service with S3 backend by loading .env.test
+// Skips the test if S3/MinIO is not configured
+func createS3TestService(t *testing.T) simplecontent.Service {
+	// Load .env.test file
+	if err := godotenv.Load("../../.env.test"); err != nil {
+		t.Skip("Skipping S3 test: .env.test not found")
+	}
+
+	// Check if S3 is configured
+	if os.Getenv("STORAGE_BACKEND") != "s3" {
+		t.Skip("Skipping S3 test: STORAGE_BACKEND is not s3")
+	}
+
+	// Read S3 configuration from environment
+	s3Config := s3storage.Config{
+		Region:                 os.Getenv("AWS_REGION"),
+		Bucket:                 os.Getenv("AWS_S3_BUCKET"),
+		AccessKeyID:            os.Getenv("AWS_ACCESS_KEY_ID"),
+		SecretAccessKey:        os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		Endpoint:               os.Getenv("AWS_S3_ENDPOINT"),
+		UseSSL:                 false,
+		UsePathStyle:           true,
+		PresignDuration:        3600,
+		CreateBucketIfNotExist: true,
+	}
+
+	// Create S3 storage backend
+	s3Store, err := s3storage.New(s3Config)
+	if err != nil {
+		t.Fatalf("Failed to create S3 storage: %v", err)
+	}
+
+	// Create memory repository
+	repo := memoryrepo.New()
+
+	// Create service with S3 backend
+	service, err := simplecontent.New(
+		simplecontent.WithRepository(repo),
+		simplecontent.WithBlobStore("default", s3Store),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
+
+	return service
+}
+
+// createS3TestServer creates a server with S3 backend for testing
+func createS3TestServer(t *testing.T) *Server {
+	service := createS3TestService(t)
+	config := DefaultConfig(service)
+	config.StorageService = service.(simplecontent.StorageService)
 
 	server, err := New(config)
 	if err != nil {
@@ -47,6 +112,7 @@ func createTestServer(t *testing.T) *Server {
 func TestServerCreation(t *testing.T) {
 	service := createTestService(t)
 	config := DefaultConfig(service)
+	config.StorageService = service.(simplecontent.StorageService)
 
 	server, err := New(config)
 	if err != nil {
@@ -59,6 +125,10 @@ func TestServerCreation(t *testing.T) {
 
 	if server.service == nil {
 		t.Fatal("Service is nil")
+	}
+
+	if server.storageService == nil {
+		t.Fatal("Storage service is nil")
 	}
 
 	if server.mcpServer == nil {
@@ -74,15 +144,19 @@ func TestConfigValidation(t *testing.T) {
 	}{
 		{
 			name: "valid config",
-			config: Config{
-				Service:         createTestService(t),
-				Name:            "test-server",
-				Version:         "0.1.0",
-				Mode:            TransportStdio,
-				MaxBatchSize:    100,
-				DefaultPageSize: 50,
-				MaxPageSize:     1000,
-			},
+			config: func() Config {
+				svc := createTestService(t)
+				return Config{
+					Service:         svc,
+					StorageService:  svc.(simplecontent.StorageService),
+					Name:            "test-server",
+					Version:         "0.1.0",
+					Mode:            TransportStdio,
+					MaxBatchSize:    100,
+					DefaultPageSize: 50,
+					MaxPageSize:     1000,
+				}
+			}(),
 			wantError: false,
 		},
 		{
@@ -97,9 +171,10 @@ func TestConfigValidation(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name: "missing name",
+			name: "missing storage service",
 			config: Config{
 				Service:         createTestService(t),
+				Name:            "test-server",
 				Version:         "0.1.0",
 				MaxBatchSize:    100,
 				DefaultPageSize: 50,
@@ -108,15 +183,34 @@ func TestConfigValidation(t *testing.T) {
 			wantError: true,
 		},
 		{
+			name: "missing name",
+			config: func() Config {
+				svc := createTestService(t)
+				return Config{
+					Service:         svc,
+					StorageService:  svc.(simplecontent.StorageService),
+					Version:         "0.1.0",
+					MaxBatchSize:    100,
+					DefaultPageSize: 50,
+					MaxPageSize:     1000,
+				}
+			}(),
+			wantError: true,
+		},
+		{
 			name: "invalid page size",
-			config: Config{
-				Service:         createTestService(t),
-				Name:            "test-server",
-				Version:         "0.1.0",
-				MaxBatchSize:    100,
-				DefaultPageSize: 100,
-				MaxPageSize:     50,
-			},
+			config: func() Config {
+				svc := createTestService(t)
+				return Config{
+					Service:         svc,
+					StorageService:  svc.(simplecontent.StorageService),
+					Name:            "test-server",
+					Version:         "0.1.0",
+					MaxBatchSize:    100,
+					DefaultPageSize: 100,
+					MaxPageSize:     50,
+				}
+			}(),
 			wantError: true,
 		},
 	}
@@ -188,6 +282,110 @@ func TestUploadContentTool(t *testing.T) {
 
 	if resultData["status"] != "uploaded" {
 		t.Errorf("Expected status 'uploaded', got %v", resultData["status"])
+	}
+}
+
+func TestCreateUploadTool(t *testing.T) {
+	server := createS3TestServer(t)
+	ctx := context.Background()
+
+	ownerID := uuid.New()
+
+	args := map[string]interface{}{
+		"owner_id":      ownerID.String(),
+		"name":          "test-async.txt",
+		"description":   "Test async upload",
+		"document_type": "text/plain",
+		"file_name":     "test-async.txt",
+		"tags":          []string{"test", "async"},
+	}
+
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("Failed to marshal args: %v", err)
+	}
+
+	req := &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{
+			Name:      "create_upload",
+			Arguments: argsJSON,
+		},
+	}
+
+	result, err := server.handleCreateUpload(ctx, req)
+	if err != nil {
+		t.Fatalf("handleCreateUpload failed: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("Result is nil")
+	}
+
+	if len(result.Content) == 0 {
+		t.Fatal("Result content is empty")
+	}
+
+	// Verify the result contains expected fields
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatal("Result content is not TextContent")
+	}
+
+	var resultData map[string]interface{}
+	if err := json.Unmarshal([]byte(textContent.Text), &resultData); err != nil {
+		t.Fatalf("Failed to unmarshal result: %v", err)
+	}
+
+	// Verify content_id is present and valid
+	contentID, ok := resultData["content_id"].(string)
+	if !ok || contentID == "" {
+		t.Fatal("Result does not contain valid content_id")
+	}
+
+	// Verify upload_url is present
+	uploadURL, ok := resultData["upload_url"].(string)
+	if !ok || uploadURL == "" {
+		t.Fatal("Result does not contain valid upload_url")
+	}
+
+	// Verify status is "created"
+	if resultData["status"] != "created" {
+		t.Errorf("Expected status 'created', got %v", resultData["status"])
+	}
+
+	// Verify created_at is present
+	if resultData["created_at"] == nil {
+		t.Error("Result does not contain created_at")
+	}
+
+	// Verify the content was actually created by fetching it
+	getArgs := map[string]interface{}{
+		"content_id": contentID,
+	}
+
+	getArgsJSON, _ := json.Marshal(getArgs)
+	getReq := &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{
+			Name:      "get_content",
+			Arguments: getArgsJSON,
+		},
+	}
+
+	getResult, err := server.handleGetContent(ctx, getReq)
+	if err != nil {
+		t.Fatalf("handleGetContent failed: %v", err)
+	}
+
+	getTextContent := getResult.Content[0].(*mcp.TextContent)
+	var getResultData map[string]interface{}
+	json.Unmarshal([]byte(getTextContent.Text), &getResultData)
+
+	if getResultData["id"] != contentID {
+		t.Errorf("Expected content_id %s, got %v", contentID, getResultData["content_id"])
+	}
+
+	if getResultData["status"] != "created" {
+		t.Errorf("Expected status 'created', got %v", getResultData["status"])
 	}
 }
 
