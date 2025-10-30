@@ -63,18 +63,18 @@ func main() {
 
 	// Initialize simple-content service
 	// Try to load from environment first, fallback to in-memory
-	service, repo, err := CreateServiceFromEnv()
+	service, storageService, repo, err := CreateServiceFromEnv()
 	if err != nil {
 		log.Printf("Warning: Failed to load service from environment: %v", err)
 		log.Println("Falling back to in-memory service...")
-		service, repo, err = createService()
+		service, storageService, repo, err = createService()
 		if err != nil {
 			log.Fatalf("Failed to create service: %v", err)
 		}
 	}
 
 	// Create MCP server configuration from environment
-	config := LoadConfigFromEnv(service)
+	config := LoadConfigFromEnv(service, storageService)
 
 	// Create admin service if repository is available
 	if repo != nil {
@@ -107,7 +107,7 @@ func main() {
 
 // createService creates a simple-content service with in-memory storage
 // This is suitable for development and testing
-func createService() (simplecontent.Service, simplecontent.Repository, error) {
+func createService() (simplecontent.Service, simplecontent.StorageService, simplecontent.Repository, error) {
 	// Create in-memory repository
 	repo := memoryrepo.New()
 
@@ -120,8 +120,14 @@ func createService() (simplecontent.Service, simplecontent.Repository, error) {
 		simplecontent.WithBlobStore("default", blobStore),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create service: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create service: %w", err)
 	}
 
-	return service, repo, nil
+	// Service itself implements StorageService
+	storageService, ok := service.(simplecontent.StorageService)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("service does not implement StorageService")
+	}
+
+	return service, storageService, repo, nil
 }

@@ -20,8 +20,9 @@ import (
 )
 
 // LoadConfigFromEnv creates a server configuration from environment variables
-func LoadConfigFromEnv(service simplecontent.Service) mcpserver.Config {
+func LoadConfigFromEnv(service simplecontent.Service, storageService simplecontent.StorageService) mcpserver.Config {
 	config := mcpserver.DefaultConfig(service)
+	config.StorageService = storageService
 
 	// Transport mode
 	if mode := os.Getenv("MCP_MODE"); mode != "" {
@@ -155,7 +156,7 @@ func parseAPIKeyEnv(value string) *auth.KeyInfo {
 // - Repository: memory, postgres (via DATABASE_URL)
 // - Storage: memory, fs (filesystem via STORAGE_PATH), s3 (requires AWS SDK)
 // Returns both service and repository (repository is needed for admin operations)
-func CreateServiceFromEnv() (simplecontent.Service, simplecontent.Repository, error) {
+func CreateServiceFromEnv() (simplecontent.Service, simplecontent.StorageService, simplecontent.Repository, error) {
 	ctx := context.Background()
 
 	// Configuration
@@ -171,12 +172,12 @@ func CreateServiceFromEnv() (simplecontent.Service, simplecontent.Repository, er
 		// PostgreSQL repository
 		pool, err := pgxpool.New(ctx, databaseURL)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+			return nil, nil, nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
 		}
 
 		// Test connection
 		if err := pool.Ping(ctx); err != nil {
-			return nil, nil, fmt.Errorf("failed to ping PostgreSQL: %w", err)
+			return nil, nil, nil, fmt.Errorf("failed to ping PostgreSQL: %w", err)
 		}
 
 		repo = postgresrepo.New(pool)
@@ -199,19 +200,19 @@ func CreateServiceFromEnv() (simplecontent.Service, simplecontent.Repository, er
 			URLPrefix: getEnvOrDefault("STORAGE_URL_PREFIX", ""),
 		})
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create filesystem storage: %w", err)
+			return nil, nil, nil, fmt.Errorf("failed to create filesystem storage: %w", err)
 		}
 
 	case "s3":
 		// S3 storage - requires AWS SDK dependencies
-		return nil, nil, fmt.Errorf("S3 storage requires AWS SDK dependencies - not yet implemented")
+		return nil, nil, nil, fmt.Errorf("s3 storage is not implemented yet")
 
 	case "memory":
 		// In-memory storage (default)
 		store = memorystorage.New()
 
 	default:
-		return nil, nil, fmt.Errorf("unknown storage backend: %s", storageBackend)
+		return nil, nil, nil, fmt.Errorf("unknown storage backend: %s", storageBackend)
 	}
 
 	// Create service
@@ -220,10 +221,16 @@ func CreateServiceFromEnv() (simplecontent.Service, simplecontent.Repository, er
 		simplecontent.WithBlobStore("default", store),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create service: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create service: %w", err)
 	}
 
-	return service, repo, nil
+	// Service itself implements StorageService
+	storageService, ok := service.(simplecontent.StorageService)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("service does not implement StorageService")
+	}
+
+	return service, storageService, repo, nil
 }
 
 // getEnvOrDefault returns environment variable value or default
