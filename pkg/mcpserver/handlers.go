@@ -128,8 +128,7 @@ func (s *Server) handleCreateUpload(ctx context.Context, req *mcp.CallToolReques
 			CustomMetadata: customMetadata,
 		}
 		if err := s.service.SetContentMetadata(ctx, metadataReq); err != nil {
-			// Don't fail if metadata setting fails, just log it
-			// The content is already created
+			return nil, s.mapError(err)
 		}
 	}
 
@@ -234,6 +233,7 @@ func (s *Server) handleUploadDone(ctx context.Context, req *mcp.CallToolRequest)
 	}
 	if err := s.service.SetContentMetadata(ctx, metadataReq); err != nil {
 		// Don't fail if metadata update fails
+		fmt.Println("Failed to update content metadata:", err)
 	}
 
 	// Return success response
