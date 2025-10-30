@@ -21,8 +21,9 @@ const (
 // Config holds server configuration
 type Config struct {
 	// Core dependencies
-	Service      simplecontent.Service
-	AdminService admin.AdminService // Optional: for admin operations (list all content, etc.)
+	Service        simplecontent.Service
+	StorageService simplecontent.StorageService // Required for object operations and upload URLs
+	AdminService   admin.AdminService           // Optional: for admin operations (list all content, etc.)
 
 	// Server settings
 	Name    string
@@ -75,6 +76,10 @@ func DefaultConfig(service simplecontent.Service) Config {
 func (c *Config) Validate() error {
 	if c.Service == nil {
 		return &ConfigError{Field: "Service", Message: "service is required"}
+	}
+
+	if c.StorageService == nil {
+		return &ConfigError{Field: "StorageService", Message: "storage service is required"}
 	}
 
 	if c.Name == "" {

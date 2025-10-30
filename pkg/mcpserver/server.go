@@ -21,10 +21,11 @@ import (
 
 // Server wraps a simple-content Service and exposes it via MCP
 type Server struct {
-	service      simplecontent.Service
-	adminService admin.AdminService // Optional: for admin operations
-	mcpServer    *mcp.Server
-	config       Config
+	service        simplecontent.Service
+	storageService simplecontent.StorageService // Required for object operations
+	adminService   admin.AdminService           // Optional: for admin operations
+	mcpServer      *mcp.Server
+	config         Config
 }
 
 // New creates a new MCP server
@@ -35,9 +36,10 @@ func New(config Config) (*Server, error) {
 	}
 
 	s := &Server{
-		service:      config.Service,
-		adminService: config.AdminService,
-		config:       config,
+		service:        config.Service,
+		storageService: config.StorageService,
+		adminService:   config.AdminService,
+		config:         config,
 	}
 
 	// Create MCP server
