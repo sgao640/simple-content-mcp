@@ -389,6 +389,131 @@ func TestCreateUploadTool(t *testing.T) {
 	}
 }
 
+func TestUploadDoneTool(t *testing.T) {
+	server := createS3TestServer(t)
+	ctx := context.Background()
+
+	ownerID := uuid.New()
+
+	// Step 1: Create content with create_upload
+	createArgs := map[string]interface{}{
+		"owner_id":      ownerID.String(),
+		"name":          "test-upload-done.txt",
+		"description":   "Test upload done workflow",
+		"document_type": "text/plain",
+		"file_name":     "test-upload-done.txt",
+	}
+
+	createArgsJSON, _ := json.Marshal(createArgs)
+	createReq := &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{
+			Name:      "create_upload",
+			Arguments: createArgsJSON,
+		},
+	}
+
+	createResult, err := server.handleCreateUpload(ctx, createReq)
+	if err != nil {
+		t.Fatalf("handleCreateUpload failed: %v", err)
+	}
+
+	// Extract content_id and upload_url
+	createTextContent := createResult.Content[0].(*mcp.TextContent)
+	var createData map[string]interface{}
+	json.Unmarshal([]byte(createTextContent.Text), &createData)
+	contentID := createData["content_id"].(string)
+	uploadURL := createData["upload_url"].(string)
+
+	// Verify we got an upload URL
+	if uploadURL == "" {
+		t.Fatal("No upload URL returned")
+	}
+
+	// Step 2: Simulate file upload to S3
+	// For now, we'll use the service directly to upload the object
+	// In a real scenario, the client would PUT to the uploadURL
+	testData := []byte("Hello, this is test content for upload_done!")
+
+	// We need to upload via the storage service
+	contentUUID, _ := uuid.Parse(contentID)
+	objects, _ := server.service.GetObjectsByContentID(ctx, contentUUID)
+	if len(objects) > 0 {
+		uploadReq := simplecontent.UploadObjectRequest{
+			ObjectID: objects[0].ID,
+			Reader:   strings.NewReader(string(testData)),
+			MimeType: "text/plain",
+		}
+		if err := server.storageService.UploadObject(ctx, uploadReq); err != nil {
+			t.Fatalf("Failed to upload object: %v", err)
+		}
+	}
+
+	// Step 3: Call upload_done
+	doneArgs := map[string]interface{}{
+		"content_id": contentID,
+	}
+
+	doneArgsJSON, _ := json.Marshal(doneArgs)
+	doneReq := &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{
+			Name:      "upload_done",
+			Arguments: doneArgsJSON,
+		},
+	}
+
+	doneResult, err := server.handleUploadDone(ctx, doneReq)
+	if err != nil {
+		t.Fatalf("handleUploadDone failed: %v", err)
+	}
+
+	// Verify the result
+	doneTextContent := doneResult.Content[0].(*mcp.TextContent)
+	var doneData map[string]interface{}
+	json.Unmarshal([]byte(doneTextContent.Text), &doneData)
+
+	// Verify status changed to "uploaded"
+	if doneData["status"] != "uploaded" {
+		t.Errorf("Expected status 'uploaded', got %v", doneData["status"])
+	}
+
+	// Verify file_size was updated
+	fileSize, ok := doneData["file_size"].(float64)
+	if !ok || fileSize <= 0 {
+		t.Errorf("Expected positive file_size, got %v", doneData["file_size"])
+	}
+
+	// Verify mime_type was updated
+	if doneData["mime_type"] == nil || doneData["mime_type"] == "" {
+		t.Error("Expected mime_type to be set")
+	}
+
+	// Step 4: Verify content was actually updated
+	getArgs := map[string]interface{}{
+		"content_id": contentID,
+	}
+
+	getArgsJSON, _ := json.Marshal(getArgs)
+	getReq := &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{
+			Name:      "get_content",
+			Arguments: getArgsJSON,
+		},
+	}
+
+	getResult, err := server.handleGetContent(ctx, getReq)
+	if err != nil {
+		t.Fatalf("handleGetContent failed: %v", err)
+	}
+
+	getTextContent := getResult.Content[0].(*mcp.TextContent)
+	var getData map[string]interface{}
+	json.Unmarshal([]byte(getTextContent.Text), &getData)
+
+	if getData["status"] != "uploaded" {
+		t.Errorf("Content status should be 'uploaded', got %v", getData["status"])
+	}
+}
+
 func TestGetContentTool(t *testing.T) {
 	server := createTestServer(t)
 	ctx := context.Background()
