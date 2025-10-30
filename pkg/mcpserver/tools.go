@@ -128,6 +128,21 @@ func (s *Server) registerTools() error {
 			},
 		},
 		{
+			Name:        "upload_done",
+			Description: "Mark content as uploaded after async upload completes",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"content_id": map[string]interface{}{
+						"type":        "string",
+						"format":      "uuid",
+						"description": "Content ID",
+					},
+				},
+				"required": []string{"content_id"},
+			},
+		},
+		{
 			Name:        "get_content",
 			Description: "Retrieve content metadata by ID",
 			InputSchema: map[string]interface{}{
@@ -541,6 +556,8 @@ func (s *Server) getToolHandler(name string) mcp.ToolHandler {
 		return s.handleUploadContent
 	case "create_upload":
 		return s.handleCreateUpload
+	case "upload_done":
+		return s.handleUploadDone
 	case "get_content":
 		return s.handleGetContent
 	case "get_content_details":

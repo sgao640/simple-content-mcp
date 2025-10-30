@@ -153,12 +153,95 @@ func (s *Server) handleCreateUpload(ctx context.Context, req *mcp.CallToolReques
 		return nil, s.mapError(err)
 	}
 
-	// Return content_id, upload_url, and status
+	// Return content_id, upload_url, and statusadd
 	return newTextResult(formatJSON(map[string]interface{}{
 		"content_id": content.ID.String(),
 		"upload_url": uploadURL,
 		"status":     string(content.Status),
 		"created_at": content.CreatedAt,
+	})), nil
+}
+
+// handleUploadDone marks content as uploaded after async upload completes
+func (s *Server) handleUploadDone(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Unmarshal arguments
+	var params map[string]interface{}
+	if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
+		return nil, mcperrors.NewValidationError("arguments", err)
+	}
+
+	// Parse content_id
+	contentID, err := parseUUID(params["content_id"])
+	if err != nil {
+		return nil, mcperrors.NewValidationError("content_id", err)
+	}
+
+	// Get content to verify it exists
+	content, err := s.service.GetContent(ctx, contentID)
+	if err != nil {
+		return nil, s.mapError(err)
+	}
+
+	// Verify status is "created" (we only mark uploaded content that was created via create_upload)
+	if content.Status != string(simplecontent.ContentStatusCreated) {
+		return nil, mcperrors.NewValidationError("status", fmt.Errorf("content status must be 'created', got '%s'", content.Status))
+	}
+
+	// Get objects for the content
+	objects, err := s.service.GetObjectsByContentID(ctx, contentID)
+	if err != nil {
+		return nil, s.mapError(err)
+	}
+
+	if len(objects) == 0 {
+		return nil, mcperrors.NewValidationError("objects", fmt.Errorf("no objects found for content"))
+	}
+
+	// Get the first object (should only be one for original content)
+	obj := objects[0]
+
+	// Update object metadata from storage (gets file size, mime type from actual stored object)
+	objMetadata, err := s.storageService.UpdateObjectMetaFromStorage(ctx, obj.ID)
+	if err != nil {
+		return nil, s.mapError(err)
+	}
+
+	// Update content status to "uploaded"
+	if err := s.service.UpdateContentStatus(ctx, contentID, simplecontent.ContentStatusUploaded); err != nil {
+		return nil, s.mapError(err)
+	}
+
+	// Update object status to "uploaded"
+	if err := s.service.UpdateObjectStatus(ctx, obj.ID, simplecontent.ObjectStatusUploaded); err != nil {
+		return nil, s.mapError(err)
+	}
+
+	// Get content metadata
+	metadata, err := s.service.GetContentMetadata(ctx, contentID)
+	if err != nil {
+		return nil, s.mapError(err)
+	}
+	// Update content metadata with file size and filename from object metadata
+	metadataReq := simplecontent.SetContentMetadataRequest{
+		ContentID:   contentID,
+		FileSize:    objMetadata.SizeBytes,
+		ContentType: objMetadata.MimeType,
+		FileName:    metadata.FileName,
+		Tags:        metadata.Tags,
+	}
+	if metadata.Metadata != nil {
+		metadataReq.CustomMetadata = metadata.Metadata
+	}
+	if err := s.service.SetContentMetadata(ctx, metadataReq); err != nil {
+		// Don't fail if metadata update fails
+	}
+
+	// Return success response
+	return newTextResult(formatJSON(map[string]interface{}{
+		"content_id": contentID.String(),
+		"status":     string(simplecontent.ContentStatusUploaded),
+		"file_size":  objMetadata.SizeBytes,
+		"mime_type":  objMetadata.MimeType,
 	})), nil
 }
 
